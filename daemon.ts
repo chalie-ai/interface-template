@@ -474,18 +474,16 @@ async function executeCommand(
  * ─── Structure Rules ──────────────────────────────────────────────────────────
  *
  * - Return exactly one root `<div>` that fills its container.
- * - Scope all your CSS to your root element to avoid leaking into the dashboard.
- *   Use a unique class name (e.g. `.weather-widget`) as a prefix on every rule.
+ * - Do NOT include a `<style>` tag — the dashboard provides styling options.
  * - Use `width: 100%; height: 100%` on the root div — the dashboard sets the
  *   container size.
- * - Inline `<style>` tags and `<script type="module">` tags inside your root
- *   div are both fine.
+ * - `<script type="module">` tags inside your root div are fine.
  *
  * ─── Design Guidelines ────────────────────────────────────────────────────────
  *
- * - Follow the Radiant design system for visual consistency with Chalie's UI:
- *   dark theme (near-black canvas), accent glows (violet #7C3AED, magenta
- *   #C026D3, cyan #00F0FF), atmospheric depth. When something glows, it matters.
+ * - The dashboard injects Radiant design system tokens — dark theme, accent
+ *   glows, typography — into the page. Use those CSS variables rather than
+ *   hardcoding colours or fonts.
  * - Your widget should work even if your daemon is temporarily down. Cache the
  *   last known data in localStorage and show it with a "last updated" timestamp
  *   rather than a blank error screen.
@@ -503,14 +501,7 @@ async function executeCommand(
  * ```ts
  * function renderInterface(config: InterfaceConfig): string {
  *   return `
- *   <div class="weather-widget">
- *     <style>
- *       .weather-widget {
- *         width: 100%; height: 100%; display: flex;
- *         align-items: center; justify-content: center;
- *         color: #e2e8f0; font-family: system-ui, sans-serif;
- *       }
- *     </style>
+ *   <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;">
  *     <div id="weather-app">Loading...</div>
  *     <script type="module">
  *       const gateway = ${JSON.stringify(config.gateway)};
@@ -527,41 +518,10 @@ async function executeCommand(
  */
 function renderInterface(config: InterfaceConfig): string {
   return `
-<div class="example-widget">
-  <style>
-    .example-widget {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 1rem;
-      color: #e2e8f0;
-      font-family: system-ui, -apple-system, sans-serif;
-    }
-    .example-widget h1 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      color: #a78bfa;
-    }
-    .example-widget p {
-      font-size: 0.9rem;
-      color: #64748b;
-      text-align: center;
-      max-width: 400px;
-      line-height: 1.6;
-    }
-    .example-widget .hint {
-      font-size: 0.75rem;
-      color: #334155;
-      margin-top: 2rem;
-    }
-  </style>
-
+<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;">
   <h1>${NAME}</h1>
   <p>${DESCRIPTION}</p>
-  <p class="hint">Replace <code>renderInterface()</code> in daemon.ts with your UI.</p>
+  <p>Replace <code>renderInterface()</code> in daemon.ts with your UI.</p>
 
   <script type="module">
     // config is injected by the framework — use these URLs to talk to
