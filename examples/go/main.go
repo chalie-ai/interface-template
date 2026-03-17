@@ -220,13 +220,24 @@ func main() {
 
 		fn, ok := handlers[body.Capability]
 		if !ok {
-			w.WriteHeader(404)
+			// Always return 200 — Chalie reads the error field, not the HTTP status.
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"text": nil, "data": nil, "error": "Unknown capability: " + body.Capability,
 			})
 			return
 		}
-		json.NewEncoder(w).Encode(fn(body.Params, gw))
+
+		// Recover from panics so a bad handler doesn't crash the daemon.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"text": nil, "data": nil, "error": fmt.Sprintf("handler panicked: %v", r),
+					})
+				}
+			}()
+			json.NewEncoder(w).Encode(fn(body.Params, gw))
+		}()
 	})
 
 	// Frontend

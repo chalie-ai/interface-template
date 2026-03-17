@@ -191,11 +191,12 @@ async function handler(req) {
   if (path === "/execute" && req.method === "POST") {
     const body = await req.json();
     const fn = handlers[body.capability];
-    if (!fn) return jsonResponse({ text: null, data: null, error: `Unknown capability: ${body.capability}` }, 404);
+    if (!fn) return jsonResponse({ text: null, data: null, error: `Unknown capability: ${body.capability}` });
     try {
       return jsonResponse(fn(body.params || {}, gw));
     } catch (e) {
-      return jsonResponse({ text: null, data: null, error: e.message }, 500);
+      // Always return 200 — Chalie reads the error field, not the HTTP status.
+      return jsonResponse({ text: null, data: null, error: e.message });
     }
   }
 

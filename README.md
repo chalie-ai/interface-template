@@ -180,6 +180,8 @@ Chalie invokes one of your capabilities. Called when the user asks something tha
 
 The `text` field is what Chalie weaves into the conversation as natural language. The `data` field is structured data your frontend can use when the user opens the interface app.
 
+**Always return HTTP 200.** Even on failure, return `200` with `error` set — never return `4xx` or `5xx`. Chalie reads the `error` field, not the HTTP status. A non-200 status causes the error message to be lost and Chalie reports a generic failure instead of your specific error.
+
 #### `GET /meta`
 
 Interface metadata and scope declarations.
