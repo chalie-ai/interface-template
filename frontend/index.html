@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Example Interface</title>
+  <style>
+    /* Radiant design system — dark theme baseline */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --accent: #8A5CFF;
+      --accent-secondary: #FF2FD1;
+      --accent-tertiary: #00F0FF;
+      --bg-deep: #0A0F1F;
+      --bg-surface: rgba(255, 255, 255, 0.03);
+      --text-primary: #eae6f2;
+      --text-secondary: rgba(234, 230, 242, 0.58);
+      --border-subtle: rgba(255, 255, 255, 0.07);
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --radius: 16px;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .interface-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      gap: 16px;
+    }
+
+    .interface-title {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .interface-subtitle {
+      font-size: 0.9375rem;
+      color: var(--text-secondary);
+      text-align: center;
+      max-width: 400px;
+    }
+
+    .interface-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      color: var(--accent-tertiary);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-tertiary);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+  </style>
+</head>
+<body>
+  <div class="interface-container" id="app">
+    <h1 class="interface-title">Example Interface</h1>
+    <p class="interface-subtitle">
+      This is a skeleton interface. Replace this content with your own UI.
+    </p>
+    <div class="interface-status">
+      <span class="status-dot"></span>
+      <span id="statusText">Connected</span>
+    </div>
+  </div>
+  <script type="module" src="bundle.js"></script>
+</body>
+</html>
