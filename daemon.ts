@@ -459,39 +459,32 @@ async function executeCommand(
  * Return an HTML string containing a single root `<div>` with plain HTML tags.
  * The dashboard injects it directly into the page.
  *
- * ─── Data Flow ────────────────────────────────────────────────────────────────
- *
- * config.gateway     Call this to read user context or push signals/messages.
- * config.daemonHost  Call this to fetch data from your own daemon endpoints.
+ * This function is called server-side by the daemon each time the user opens
+ * the interface. Fetch whatever data you need using `getContext()` or your own
+ * data sources, then bake it directly into the returned HTML — no client-side
+ * API calls required.
  *
  * ─── Example ──────────────────────────────────────────────────────────────────
  *
  * ```ts
- * function renderInterface(config: InterfaceConfig): string {
+ * async function renderInterface(): Promise<string> {
+ *   const forecast = await fetchForecast();
+ *   const location = (await getContext()).get(CONSTANTS.SCOPES.LOCATION);
  *   return `
  *   <div>
- *     <h1>Weather</h1>
- *     <p id="forecast">Loading...</p>
- *     <script type="module">
- *       const data = await fetch(${JSON.stringify(config.daemonHost)} + "/forecast").then(r => r.json());
- *       document.getElementById("forecast").textContent = data.summary;
- *     </script>
+ *     <h1>Weather in ${location?.name ?? "your location"}</h1>
+ *     <p>${forecast.summary}</p>
  *   </div>`;
  * }
  * ```
  *
- * @param config - Gateway and daemon URLs injected by the framework.
- * @returns      - An HTML string with a single root <div>.
+ * @returns - An HTML string with a single root <div>.
  */
-function renderInterface(config: InterfaceConfig): string {
+async function renderInterface(): Promise<string> {
   return `
 <div>
   <h1>${NAME}</h1>
   <p>${DESCRIPTION}</p>
-  <script type="module">
-    const gateway = ${JSON.stringify(config.gateway)};
-    const daemon  = ${JSON.stringify(config.daemonHost)};
-  </script>
 </div>`;
 }
 
@@ -540,10 +533,6 @@ interface CommandResult {
   error?: string | null;
 }
 
-interface InterfaceConfig {
-  gateway: string;
-  daemonHost: string;
-}
 
 interface Poll {
   /** Human-readable name used in log output. */
@@ -761,7 +750,6 @@ function jsonResponse(data: unknown, status = 200): Response {
 
 async function handleRequest(
   req: Request,
-  port: number,
   gateway: string,
 ): Promise<Response> {
   const url = new URL(req.url);
@@ -820,13 +808,8 @@ async function handleRequest(
   }
 
   // Interface widget — injected into the dashboard when the user opens your interface.
-  // Returns an HTML fragment (a single root <div>), not a full document.
   if (path === "/" || path === "/index.html") {
-    const config: InterfaceConfig = {
-      gateway,
-      daemonHost: `http://localhost:${port}`,
-    };
-    const fragment = renderInterface(config);
+    const fragment = await renderInterface();
     return new Response(fragment, {
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
@@ -849,7 +832,7 @@ async function main(): Promise<void> {
   console.log(`[${NAME}] v${VERSION} starting on port ${port}`);
   console.log(`[${NAME}] gateway: ${gateway}`);
 
-  Deno.serve({ port }, (req) => handleRequest(req, port, gateway));
+  Deno.serve({ port }, (req) => handleRequest(req, gateway));
 }
 
 main();
