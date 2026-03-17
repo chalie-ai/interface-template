@@ -1,5 +1,3 @@
 data/
-*.pyc
-__pycache__/
+dist/
 .env
-node_modules/
