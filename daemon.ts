@@ -9,7 +9,7 @@
  * WHAT YOU NEED TO IMPLEMENT
  * ─────────────────────────────────────────────────────────────────────────────
  *
- *   1. IDENTITY — Fill in the constants at the top of the file.
+ *   1. IDENTITY — Fill in NAME, VERSION, DESCRIPTION, and AUTHOR.
  *
  *   2. CAPABILITIES — Declare what tools Chalie can invoke (the CAPABILITIES
  *      array). Each capability becomes an LLM-visible tool in the ACT loop.
@@ -63,18 +63,6 @@
 // =============================================================================
 // ① IDENTITY — Change these for your interface
 // =============================================================================
-
-/**
- * Unique identifier for this interface.
- *
- * Rules:
- * - Lowercase letters, numbers, and hyphens only.
- * - Must be unique across all installed interfaces.
- * - Cannot be changed after installation without uninstalling first.
- *
- * @example "weather", "github-inbox", "home-sensors"
- */
-const ID = "example";
 
 /**
  * Human-readable display name shown in the launcher and settings.
@@ -889,7 +877,6 @@ async function handleRequest(
   // Meta — interface identity and scope declarations.
   if (path === "/meta") {
     return jsonResponse({
-      id: ID,
       name: NAME,
       version: VERSION,
       description: DESCRIPTION,

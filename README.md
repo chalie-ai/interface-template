@@ -19,7 +19,7 @@ Open `daemon.ts`. There are six sections to fill in:
 
 | # | Section | What it is |
 |---|---------|------------|
-| ① | `ID`, `NAME`, `VERSION`, `DESCRIPTION`, `AUTHOR` | Interface identity |
+| ① | `NAME`, `VERSION`, `DESCRIPTION`, `AUTHOR` | Interface identity |
 | ② | `SCOPES` | What data your interface needs from the user |
 | ③ | `CAPABILITIES` | Tools Chalie's LLM can invoke |
 | ④ | `POLLS` | Background jobs (cron/scheduler style) |
