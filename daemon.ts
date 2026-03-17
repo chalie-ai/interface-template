@@ -1,3 +1,5 @@
+import { CONSTANTS, ContextResult } from "./constants.ts";
+
 /**
  * Chalie Interface Daemon — TypeScript Template
  *
@@ -145,8 +147,8 @@ const AUTHOR = "Your Name";
  */
 const SCOPES: Scopes = {
   context: {
-    location: "Shows personalised data based on your city",
-    timezone: "Displays times in your local timezone",
+    [CONSTANTS.SCOPES.LOCATION]: "Shows personalised data based on your city",
+    [CONSTANTS.SCOPES.TIMEZONE]: "Displays times in your local timezone",
   },
   signals: {
     example_update: "Periodic status updates added to Chalie's awareness",
@@ -303,7 +305,7 @@ const CAPABILITIES: Capability[] = [
  *     every: hours(1),
  *     async run() {
  *       const ctx = await getContext();
- *       const city = ctx.location?.name ?? "unknown location";
+ *       const city = ctx.get(CONSTANTS.SCOPES.LOCATION)?.name ?? "unknown location";
  *       await sendSignal(
  *         "example_update",
  *         `Interface is running. User is in ${city}.`,
@@ -336,7 +338,8 @@ const POLLS: Poll[] = [
      */
     async run() {
       const ctx = await getContext();
-      const city = ctx.location?.name ?? "unknown location";
+      const location = ctx.get(CONSTANTS.SCOPES.LOCATION);
+      const city = location?.name ?? "unknown location";
       await sendSignal(
         "example_update",
         `Interface is running. User is in ${city}.`,
@@ -402,10 +405,11 @@ const POLLS: Poll[] = [
  *       const location = params.location as string | undefined;
  *       if (!location) {
  *         const ctx = await getContext();
- *         if (!ctx.location) {
+ *         const location = ctx.get(CONSTANTS.SCOPES.LOCATION);
+ *         if (!location) {
  *           return { error: "No location provided and location scope was denied." };
  *         }
- *         // use ctx.location.name
+ *         // use location.name
  *       }
  *       const forecast = await fetchForecastFromExternalAPI(location);
  *       return {
@@ -643,15 +647,6 @@ interface Poll {
   run: () => Promise<void>;
 }
 
-interface Context {
-  timezone?: string;
-  local_time?: string;
-  location?: { lat: number; lon: number; name: string };
-  device?: { class: string; platform: string };
-  energy?: number;
-  attention?: "focused" | "ambient" | "distracted";
-}
-
 // ── Interval Helpers ──────────────────────────────────────────────────────────
 
 /** Convert seconds to milliseconds for use in Poll.every. */
@@ -800,30 +795,31 @@ async function sendMessage(
 /**
  * Get the user's current context from the gateway.
  *
- * Returns location, timezone, device class, energy level, and attention state
- * — filtered by the scopes the user approved. Fields the user denied are
- * simply absent from the response object.
+ * Returns a `ContextResult` accessor. Call `.get(CONSTANTS.SCOPES.*)` to read
+ * a field — the return type is inferred from the scope key you pass.
  *
- * Always handle missing fields gracefully:
+ * Fields the user denied are absent (`.get()` returns `undefined`).
+ * Always handle undefined gracefully:
  *
  *   const ctx = await getContext();
- *   const city = ctx.location?.name ?? "your location";  // ✓
- *   const city = ctx.location!.name;                     // ✗ may throw
+ *   const location = ctx.get(CONSTANTS.SCOPES.LOCATION);
+ *   const city = location?.name ?? "your location";  // ✓
+ *   const city = location!.name;                     // ✗ may throw
  *
  * This function is safe to call frequently — the gateway caches the response
  * and the round-trip is local. It will never throw; on any error it returns
- * an empty object.
+ * an empty context (all `.get()` calls return `undefined`).
  *
- * @returns Partial context object. Only approved fields are present.
+ * @returns ContextResult with typed `.get()` accessor.
  */
-async function getContext(): Promise<Context> {
+async function getContext(): Promise<ContextResult> {
   try {
     const resp = await fetch(`${_gateway}/context`);
-    if (resp.ok) return await resp.json() as Context;
+    if (resp.ok) return new ContextResult(await resp.json());
   } catch (e) {
     console.warn(`[context] fetch failed: ${(e as Error).message}`);
   }
-  return {};
+  return new ContextResult({});
 }
 
 // ── Poll Scheduler ─────────────────────────────────────────────────────────────
