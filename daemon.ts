@@ -454,12 +454,12 @@ async function executeCommand(
 // =============================================================================
 
 /**
- * Render the full-screen interface shown when the user opens your app.
+ * Render the widget shown when the user opens your interface inside the dashboard.
  *
- * Return a complete HTML document as a string. The dashboard loads it in a
- * sandboxed iframe — treat it as a standalone web page. The `config` object
- * is injected by the framework and gives you the URLs you need to talk back
- * to your daemon and to the gateway.
+ * Return an HTML string containing a single root `<div>`. The dashboard injects
+ * it directly into the page — do NOT return a full HTML document. No `<!DOCTYPE>`,
+ * no `<html>`, no `<head>`, no `<body>`. The dashboard owns the page shell;
+ * your interface is a full-screen widget within it.
  *
  * ─── The `config` Argument ────────────────────────────────────────────────────
  *
@@ -471,23 +471,28 @@ async function executeCommand(
  *                    Use this to fetch interface-specific data from your own
  *                    endpoints, if you add any.
  *
+ * ─── Structure Rules ──────────────────────────────────────────────────────────
+ *
+ * - Return exactly one root `<div>` that fills its container.
+ * - Scope all your CSS to your root element to avoid leaking into the dashboard.
+ *   Use a unique class name (e.g. `.weather-widget`) as a prefix on every rule.
+ * - Use `width: 100%; height: 100%` on the root div — the dashboard sets the
+ *   container size.
+ * - Inline `<style>` tags and `<script type="module">` tags inside your root
+ *   div are both fine.
+ *
  * ─── Design Guidelines ────────────────────────────────────────────────────────
  *
- * - Use 100% height and width — the dashboard provides the container.
  * - Follow the Radiant design system for visual consistency with Chalie's UI:
  *   dark theme (near-black canvas), accent glows (violet #7C3AED, magenta
- *   #C026D3, cyan #00F0FF), atmospheric depth. When something glows, it
- *   matters — use restraint.
- * - Inline all CSS in a `<style>` tag or in element style attributes.
- * - Your app should work even if your daemon is temporarily down. Cache the
- *   last known data and show it with a "last updated" timestamp rather than
- *   a blank error screen.
+ *   #C026D3, cyan #00F0FF), atmospheric depth. When something glows, it matters.
+ * - Your widget should work even if your daemon is temporarily down. Cache the
+ *   last known data in localStorage and show it with a "last updated" timestamp
+ *   rather than a blank error screen.
  *
  * ─── Data Flow ────────────────────────────────────────────────────────────────
  *
- * Your UI can fetch data in two ways:
- *
- *   1. From the gateway (scope-enforced context, signals, messages):
+ *   1. From the gateway (scope-enforced context):
  *      fetch(`${config.gateway}/context`)
  *
  *   2. From your own daemon (any custom endpoints you add):
@@ -497,82 +502,66 @@ async function executeCommand(
  *
  * ```ts
  * function renderInterface(config: InterfaceConfig): string {
- *   return `<!DOCTYPE html>
- *   <html lang="en">
- *   <head>
- *     <meta charset="UTF-8" />
- *     <title>${NAME}</title>
+ *   return `
+ *   <div class="weather-widget">
  *     <style>
- *       body {
- *         margin: 0; height: 100vh; background: #0a0a0f; color: #e2e8f0;
- *         font-family: system-ui, sans-serif; display: flex;
+ *       .weather-widget {
+ *         width: 100%; height: 100%; display: flex;
  *         align-items: center; justify-content: center;
+ *         color: #e2e8f0; font-family: system-ui, sans-serif;
  *       }
  *     </style>
- *   </head>
- *   <body>
- *     <div id="app">Loading...</div>
+ *     <div id="weather-app">Loading...</div>
  *     <script type="module">
  *       const gateway = ${JSON.stringify(config.gateway)};
  *       const ctx = await fetch(gateway + "/context").then(r => r.json());
- *       document.getElementById("app").textContent =
- *         "Hello from " + (ctx.location?.name ?? "an unknown location");
+ *       document.getElementById("weather-app").textContent =
+ *         "Weather for " + (ctx.location?.name ?? "your location");
  *     </script>
- *   </body>
- *   </html>`;
+ *   </div>`;
  * }
  * ```
  *
  * @param config - Gateway and daemon URLs injected by the framework.
- * @returns      - A complete HTML document string.
+ * @returns      - An HTML string with a single root <div>. No full document.
  */
 function renderInterface(config: InterfaceConfig): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${NAME}</title>
+  return `
+<div class="example-widget">
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      height: 100vh;
-      background: #0a0a0f;
-      color: #e2e8f0;
-      font-family: system-ui, -apple-system, sans-serif;
+    .example-widget {
+      width: 100%;
+      height: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 1rem;
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, sans-serif;
     }
-
-    h1 {
+    .example-widget h1 {
       font-size: 1.5rem;
       font-weight: 600;
       color: #a78bfa;
     }
-
-    p {
+    .example-widget p {
       font-size: 0.9rem;
       color: #64748b;
       text-align: center;
       max-width: 400px;
       line-height: 1.6;
     }
-
-    .status {
+    .example-widget .hint {
       font-size: 0.75rem;
       color: #334155;
       margin-top: 2rem;
     }
   </style>
-</head>
-<body>
+
   <h1>${NAME}</h1>
   <p>${DESCRIPTION}</p>
-  <p class="status">Replace <code>renderInterface()</code> in daemon.ts with your UI.</p>
+  <p class="hint">Replace <code>renderInterface()</code> in daemon.ts with your UI.</p>
 
   <script type="module">
     // config is injected by the framework — use these URLs to talk to
@@ -582,10 +571,8 @@ function renderInterface(config: InterfaceConfig): string {
 
     // Example: fetch context from gateway (respects user-approved scopes)
     // const ctx = await fetch(gateway + "/context").then(r => r.json());
-    // console.log("User location:", ctx.location?.name);
   </script>
-</body>
-</html>`;
+</div>`;
 }
 
 // =============================================================================
@@ -912,14 +899,15 @@ async function handleRequest(
     }
   }
 
-  // Interface — the full-screen app loaded when the user opens your interface.
+  // Interface widget — injected into the dashboard when the user opens your interface.
+  // Returns an HTML fragment (a single root <div>), not a full document.
   if (path === "/" || path === "/index.html") {
     const config: InterfaceConfig = {
       gateway,
       daemonHost: `http://localhost:${port}`,
     };
-    const html = renderInterface(config);
-    return new Response(html, {
+    const fragment = renderInterface(config);
+    return new Response(fragment, {
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
