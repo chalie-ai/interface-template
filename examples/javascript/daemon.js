@@ -6,7 +6,7 @@
  *
  * Usage:
  *   deno run --allow-net --allow-read --allow-write daemon.js \
- *     --chalie-host=http://localhost:8081 --access-key=abc123 --port=4001 --data-dir=./data
+ *     --gateway=http://localhost:3000 --port=4001 --data-dir=./data
  */
 
 import { parse } from "https://deno.land/std@0.220.0/flags/mod.ts";
@@ -25,61 +25,57 @@ const INTERFACE_DESC = "A skeleton interface — replace with your own logic";
 const INTERFACE_AUTHOR = "Your Name";
 
 // ---------------------------------------------------------------------------
-// Chalie Client — handles all communication with Chalie backend
+// Gateway Client — communicates with Chalie via dashboard gateway
 // ---------------------------------------------------------------------------
 
-class ChalieClient {
-  constructor(host, accessKey) {
-    this.host = host.replace(/\/$/, "");
-    this.accessKey = accessKey;
+class GatewayClient {
+  constructor(gatewayUrl) {
+    this.gateway = gatewayUrl.replace(/\/$/, "");
   }
 
-  _headers() {
-    return {
-      Authorization: `Bearer ${this.accessKey}`,
-      "Content-Type": "application/json",
-    };
-  }
-
-  /** Push a signal to Chalie's world state (zero LLM cost). */
+  /** Push a signal to world state (zero LLM cost). Scope-gated. */
   async pushSignal(signalType, content, activationEnergy = 0.5, metadata = null) {
     try {
-      const resp = await fetch(`${this.host}/api/signals`, {
+      const resp = await fetch(`${this.gateway}/signals`, {
         method: "POST",
-        headers: this._headers(),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           signal_type: signalType,
           content,
-          source: INTERFACE_ID,
           activation_energy: activationEnergy,
           metadata,
         }),
       });
+      if (resp.status === 403) {
+        console.log(`Signal '${signalType}' denied by scope — skipping`);
+        return;
+      }
       console.log(`Signal pushed: ${signalType} (status=${resp.status})`);
     } catch (e) {
       console.warn(`Failed to push signal: ${e.message}`);
     }
   }
 
-  /** Push a message to Chalie's reasoning loop (costs LLM tokens). */
+  /** Push a message to reasoning loop (costs LLM tokens). Scope-gated. */
   async pushMessage(text, topic = null, metadata = null) {
     try {
-      await fetch(`${this.host}/api/messages`, {
+      const resp = await fetch(`${this.gateway}/messages`, {
         method: "POST",
-        headers: this._headers(),
-        body: JSON.stringify({ text, source: INTERFACE_ID, topic, metadata }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, topic, metadata }),
       });
+      if (resp.status === 403) {
+        console.log("Message denied by scope — skipping");
+      }
     } catch (e) {
       console.warn(`Failed to push message: ${e.message}`);
     }
   }
 
-  /** Get the user's current context (location, timezone, device). */
+  /** Get user context filtered by approved scopes. */
   async getContext() {
     try {
-      const resp = await fetch(`${this.host}/api/query/context`, {
-        headers: this._headers(),
-      });
+      const resp = await fetch(`${this.gateway}/context`);
       if (resp.ok) return await resp.json();
     } catch (e) {
       console.warn(`Failed to get context: ${e.message}`);
@@ -92,7 +88,7 @@ class ChalieClient {
 // Capability Handlers — REPLACE THESE with your business logic
 // ---------------------------------------------------------------------------
 
-function handleEcho(params, _chalie) {
+function handleEcho(params, _gw) {
   const text = params.text || "";
   return {
     text: `Echo: ${text}`,
@@ -101,32 +97,28 @@ function handleEcho(params, _chalie) {
   };
 }
 
-const handlers = {
-  echo: handleEcho,
-};
+const handlers = { echo: handleEcho };
 
 // ---------------------------------------------------------------------------
 // Background Worker — REPLACE with your polling/monitoring logic
 // ---------------------------------------------------------------------------
 
-async function backgroundWorker(chalie, _dataDir) {
+async function backgroundWorker(gw, _dataDir) {
   console.log("Background worker started");
   while (true) {
     try {
-      const ctx = await chalie.getContext();
-      const location = ctx?.location?.name || "unknown";
+      const ctx = await gw.getContext();
+      const location = ctx?.location?.name || "not available";
 
-      await chalie.pushSignal(
+      await gw.pushSignal(
         "example_update",
-        `Example interface is running. User location: ${location}`,
+        `Example running. User location: ${location}`,
         0.2,
       );
-      console.log("Background signal pushed");
     } catch (e) {
       console.warn(`Background worker error: ${e.message}`);
     }
-
-    await new Promise((r) => setTimeout(r, 3600_000)); // Your schedule — change as needed
+    await new Promise((r) => setTimeout(r, 3600_000)); // Your schedule
   }
 }
 
@@ -135,22 +127,22 @@ async function backgroundWorker(chalie, _dataDir) {
 // ---------------------------------------------------------------------------
 
 const args = parse(Deno.args, {
-  string: ["chalie-host", "access-key", "data-dir"],
+  string: ["gateway", "data-dir"],
   default: { port: 4001, "data-dir": "./data" },
 });
 
-if (!args["chalie-host"] || !args["access-key"]) {
-  console.error("--chalie-host and --access-key are required");
+if (!args.gateway) {
+  console.error("--gateway is required");
   Deno.exit(1);
 }
 
 await Deno.mkdir(args["data-dir"], { recursive: true });
 
-const chalie = new ChalieClient(args["chalie-host"], args["access-key"]);
+const gw = new GatewayClient(args.gateway);
 const frontendDir = join(Deno.cwd(), "..", "..", "frontend");
 
 // Start background worker
-backgroundWorker(chalie, args["data-dir"]);
+backgroundWorker(gw, args["data-dir"]);
 
 const capabilities = [
   {
@@ -169,8 +161,16 @@ const meta = {
   version: INTERFACE_VERSION,
   description: INTERFACE_DESC,
   author: INTERFACE_AUTHOR,
-  signals: ["example_update"],
-  config_schema: {},
+  scopes: {
+    context: {
+      location: "Used to personalize responses based on your city",
+      timezone: "Used to display times in your local zone",
+    },
+    signals: {
+      example_update: "Periodic status updates added to Chalie's awareness",
+    },
+    messages: {},
+  },
 };
 
 function jsonResponse(data, status = 200) {
@@ -184,36 +184,24 @@ async function handler(req) {
   const url = new URL(req.url);
   const path = url.pathname;
 
-  if (path === "/health" && req.method === "GET") {
-    return jsonResponse({ status: "ok", name: INTERFACE_NAME, version: INTERFACE_VERSION });
-  }
-
-  if (path === "/capabilities" && req.method === "GET") {
-    return jsonResponse(capabilities);
-  }
-
-  if (path === "/meta" && req.method === "GET") {
-    return jsonResponse(meta);
-  }
+  if (path === "/health") return jsonResponse({ status: "ok", name: INTERFACE_NAME, version: INTERFACE_VERSION });
+  if (path === "/capabilities") return jsonResponse(capabilities);
+  if (path === "/meta") return jsonResponse(meta);
 
   if (path === "/execute" && req.method === "POST") {
     const body = await req.json();
     const fn = handlers[body.capability];
-    if (!fn) {
-      return jsonResponse({ text: null, data: null, error: `Unknown capability: ${body.capability}` }, 404);
-    }
+    if (!fn) return jsonResponse({ text: null, data: null, error: `Unknown capability: ${body.capability}` }, 404);
     try {
-      const result = fn(body.params || {}, chalie);
-      return jsonResponse(result);
+      return jsonResponse(fn(body.params || {}, gw));
     } catch (e) {
       return jsonResponse({ text: null, data: null, error: e.message }, 500);
     }
   }
 
-  if (path === "/index.html" || path === "/bundle.js" || path === "/icon.png") {
-    const filename = path.slice(1);
+  if (["/index.html", "/bundle.js", "/icon.png"].includes(path)) {
     try {
-      return await serveFile(req, join(frontendDir, filename));
+      return await serveFile(req, join(frontendDir, path.slice(1)));
     } catch {
       return new Response("Not found", { status: 404 });
     }

@@ -1,8 +1,8 @@
 /**
  * Example Interface — Frontend Bundle
  *
- * This file is loaded by Chalie's dashboard when the user opens your interface.
- * It exports mount() and unmount() functions that the dashboard calls.
+ * Loaded by Chalie's dashboard when the user opens your interface.
+ * Exports mount() and unmount() that the dashboard calls.
  *
  * Replace the example UI with your own interface logic.
  */
@@ -11,33 +11,30 @@
  * Called when the user opens this interface from the dashboard launcher.
  *
  * @param {HTMLElement} container - The DOM element to render into (full screen).
- * @param {Object} config - Runtime configuration.
- * @param {string} config.chalie_host - Chalie backend URL.
- * @param {string} config.access_key - Authentication key for Chalie API.
- * @param {string} config.daemon_host - This interface's daemon URL.
+ * @param {Object} config - Runtime configuration provided by the dashboard.
+ * @param {string} config.gateway - Dashboard gateway URL for Chalie API calls.
+ * @param {string} config.daemon_host - This interface's daemon URL for direct data.
  */
 export function mount(container, config) {
-  // Store config for later use
-  container._interfaceConfig = config;
+  container._config = config;
 
-  // Your UI initialization here
-  // For now, just update the status text
   const statusEl = container.querySelector("#statusText");
   if (statusEl) {
-    statusEl.textContent = `Connected to ${config.chalie_host}`;
+    statusEl.textContent = "Connected";
   }
 
-  // Example: fetch data from your daemon
-  // fetch(`${config.daemon_host}/some-endpoint`)
+  // Example: fetch user context via gateway (scope-filtered)
+  // fetch(`${config.gateway}/context`)
+  //   .then(r => r.json())
+  //   .then(ctx => {
+  //     // ctx.location may be missing if user denied that scope
+  //     if (ctx.location) console.log('User is in', ctx.location.name);
+  //   });
+
+  // Example: fetch data from your own daemon
+  // fetch(`${config.daemon_host}/my-custom-endpoint`)
   //   .then(r => r.json())
   //   .then(data => renderYourUI(container, data));
-
-  // Example: fetch user context from Chalie
-  // fetch(`${config.chalie_host}/api/query/context`, {
-  //   headers: { 'Authorization': `Bearer ${config.access_key}` }
-  // })
-  //   .then(r => r.json())
-  //   .then(ctx => console.log('User location:', ctx.location));
 
   console.log("[ExampleInterface] Mounted");
 }
@@ -49,7 +46,6 @@ export function mount(container, config) {
  * @param {HTMLElement} container - The same container passed to mount().
  */
 export function unmount(container) {
-  // Clean up: stop intervals, remove event listeners, etc.
-  delete container._interfaceConfig;
+  delete container._config;
   console.log("[ExampleInterface] Unmounted");
 }

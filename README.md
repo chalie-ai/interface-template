@@ -6,7 +6,7 @@ Build interfaces that extend Chalie's capabilities. An interface is a self-conta
 
 An interface is an app that connects to Chalie. It has two parts:
 
-- **Backend daemon** — an HTTP server that exposes capabilities (tools) Chalie can invoke, pushes signals and messages to Chalie, and manages its own lifecycle
+- **Backend daemon** — an HTTP server that exposes capabilities (tools) Chalie can invoke, pushes signals and messages via the gateway, and manages its own lifecycle
 - **Frontend** — an `index.html` + `bundle.js` that renders a full-screen app inside Chalie's dashboard
 
 When a user asks "what's the weather?" in chat, Chalie invokes your daemon's `get_forecast` capability. When the user opens your interface from the app launcher, your frontend renders the full weather experience.
@@ -16,8 +16,55 @@ When a user asks "what's the weather?" in chat, Chalie invokes your daemon's `ge
 1. Copy this template repo
 2. Pick a language from `examples/` (Python, Go, or JavaScript)
 3. Implement your capabilities in the handler
-4. Build your frontend in `frontend/`
-5. Install in Chalie's dashboard
+4. Declare your scopes in `/meta`
+5. Build your frontend in `frontend/`
+6. Install in Chalie's dashboard
+
+---
+
+## Architecture
+
+```
+Your daemon          Dashboard (gateway)           Chalie backend
+(localhost:4001)     (localhost:3000)               (internal)
+
+GET /health      ←── health checks ──────────────→ registers tools
+GET /capabilities←── reads tools ─────────────────→ registers tools
+GET /meta        ←── reads scopes ────────────────→ stores permissions
+POST /execute    ←── tool invocation (from Chalie reasoning loop)
+
+POST gateway ────→   validates scopes ───────────→ POST /api/signals
+     /signals        filters by user permission     (world state)
+
+POST gateway ────→   validates scopes ───────────→ POST /api/messages
+     /messages       checks message permission      (reasoning loop)
+
+GET gateway  ────→   filters response ───────────→ GET /api/query/context
+    /context         strips denied fields           (user context)
+```
+
+Your daemon never sees Chalie's host, port, or access key. The dashboard is the gateway and firewall. All auth, permission checking, and request proxying are transparent to your code.
+
+---
+
+## Security Model
+
+### No Credentials in Your Code
+
+Your daemon receives a gateway URL at startup. That's it — no tokens, no API keys for Chalie, no backend host. The dashboard identifies your daemon by its registered port and handles all authentication internally.
+
+### Scoped Permissions
+
+Your interface declares what data and actions it needs via scopes. During installation, the user sees each scope with your explanation and can approve or deny individually. The dashboard enforces these permissions at the gateway level — your daemon never receives data the user didn't approve.
+
+### Gateway Enforcement
+
+Every request from your daemon passes through the dashboard gateway:
+- **Signals**: only declared signal types are forwarded
+- **Messages**: only forwarded if the user approved message permissions
+- **Context**: only approved fields are included in the response (denied fields are stripped)
+
+If a scope is denied, your daemon receives a clean response (empty fields or 403) — never an error. Design your interface to handle partial permissions gracefully.
 
 ---
 
@@ -29,7 +76,7 @@ Your daemon is an HTTP server. It must expose these endpoints:
 
 #### `GET /health`
 
-Health check. Chalie calls this every 30 seconds.
+Health check. The dashboard calls this every 30 seconds.
 
 **Response** `200 OK`:
 
@@ -45,7 +92,7 @@ Health check. Chalie calls this every 30 seconds.
 
 #### `GET /capabilities`
 
-Declares what tools this interface provides. Chalie fetches this on install and periodically to stay in sync. These become tools that Chalie's reasoning loop can invoke.
+Declares what tools this interface provides. These become tools that Chalie's reasoning loop can invoke via `POST /execute`.
 
 **Response** `200 OK`: Array of capability objects.
 
@@ -67,7 +114,7 @@ Declares what tools this interface provides. Chalie fetches this on install and 
   {
     "name": "get_forecast",
     "description": "Get weather forecast for a location",
-    "documentation": "Returns a multi-day weather forecast. If no location is provided, uses the user's current location from Chalie's context.",
+    "documentation": "Returns a multi-day weather forecast. If no location is provided, uses the user's current location from context.",
     "parameters": [
       {
         "name": "location",
@@ -87,25 +134,13 @@ Declares what tools this interface provides. Chalie fetches this on install and 
       "type": "object",
       "description": "Forecast with daily temperature, conditions, and precipitation"
     }
-  },
-  {
-    "name": "get_current",
-    "description": "Get current weather conditions",
-    "parameters": [
-      {
-        "name": "location",
-        "type": "string",
-        "required": false,
-        "description": "City name or 'lat,lon' coordinates"
-      }
-    ]
   }
 ]
 ```
 
 #### `POST /execute`
 
-Chalie invokes one of your capabilities. This is called when the user asks something that triggers your tool.
+Chalie invokes one of your capabilities. Called when the user asks something that triggers your tool.
 
 **Request**:
 
@@ -117,10 +152,7 @@ Chalie invokes one of your capabilities. This is called when the user asks somet
 ```json
 {
   "capability": "get_forecast",
-  "params": {
-    "location": "London",
-    "days": 5
-  }
+  "params": {"location": "London", "days": 5}
 }
 ```
 
@@ -129,7 +161,7 @@ Chalie invokes one of your capabilities. This is called when the user asks somet
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `text` | string | no | Human-readable result (Chalie uses this in conversation) |
-| `data` | object | no | Structured result data |
+| `data` | object | no | Structured result data (your frontend can use this) |
 | `error` | string | no | Error description (null on success) |
 
 ```json
@@ -138,31 +170,30 @@ Chalie invokes one of your capabilities. This is called when the user asks somet
   "data": {
     "current": {"temp": 22, "condition": "partly_cloudy", "humidity": 65},
     "forecast": [
-      {"day": "Tuesday", "high": 22, "low": 14, "condition": "sunny", "precipitation": 0},
-      {"day": "Wednesday", "high": 19, "low": 12, "condition": "rain", "precipitation": 80}
+      {"day": "Tuesday", "high": 22, "low": 14, "condition": "sunny"},
+      {"day": "Wednesday", "high": 19, "low": 12, "condition": "rain"}
     ]
   },
   "error": null
 }
 ```
 
-The `text` field is what Chalie weaves into the conversation as natural language. The `data` field is structured data your frontend can use when the user opens the interface.
+The `text` field is what Chalie weaves into the conversation as natural language. The `data` field is structured data your frontend can use when the user opens the interface app.
 
 #### `GET /meta`
 
-Interface metadata for the dashboard launcher.
+Interface metadata and scope declarations.
 
 **Response** `200 OK`:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | yes | Unique interface identifier (lowercase, no spaces) |
+| `id` | string | yes | Unique identifier (lowercase, no spaces) |
 | `name` | string | yes | Display name |
 | `version` | string | yes | Semantic version |
 | `description` | string | yes | Short description |
 | `author` | string | no | Author name |
-| `signals` | string[] | no | Signal types this interface may emit |
-| `config_schema` | object | no | User-configurable settings schema |
+| `scopes` | object | yes | Permission declarations (see Scopes section) |
 
 ```json
 {
@@ -171,21 +202,29 @@ Interface metadata for the dashboard launcher.
   "version": "1.0.0",
   "description": "Current conditions, forecasts, and weather alerts",
   "author": "Chalie Team",
-  "signals": ["forecast_update", "weather_alert"],
-  "config_schema": {
-    "api_key": {"type": "string", "required": true, "label": "API Key"},
-    "units": {"type": "enum", "values": ["metric", "imperial"], "default": "metric"}
+  "scopes": {
+    "context": {
+      "location": "Required for location-based forecasts",
+      "timezone": "Required for displaying times in your local zone"
+    },
+    "signals": {
+      "forecast_update": "Hourly weather updates added to Chalie's awareness",
+      "weather_alert": "Severe weather warnings added to Chalie's awareness"
+    },
+    "messages": {
+      "weather_emergency": "Storm warnings delivered directly to you via chat"
+    }
   }
 }
 ```
 
 #### `GET /index.html`
 
-The full-screen app layout. Served when the user opens your interface from the dashboard launcher.
+Full-screen app layout. Served when the user opens your interface from the launcher.
 
 #### `GET /bundle.js`
 
-Frontend JavaScript. Loaded by the dashboard alongside your `index.html`.
+Frontend JavaScript. Loaded by the dashboard alongside `index.html`.
 
 #### `GET /icon.png`
 
@@ -193,75 +232,138 @@ Launcher icon. Square, minimum 256x256 pixels.
 
 ---
 
-### Endpoints Your Daemon CAN Call on Chalie
+### Scopes
 
-Your daemon communicates with Chalie via these endpoints. The Chalie host and access key are passed to your daemon at startup (see Initialization below).
+Scopes declare what data and actions your interface needs. The user approves or denies each scope individually during installation. The dashboard enforces them at the gateway.
 
-#### `POST {chalie_host}/api/signals` — Push a Signal (World State)
+#### Three Scope Categories
 
-Signals are passive world knowledge. Zero LLM cost. Use for background updates that Chalie should know about but doesn't need to act on immediately.
+**`context`** — which user context fields your interface needs:
 
-**Headers**: `Authorization: Bearer {access_key}`
+| Scope | Data Provided | Example Use |
+|-------|---------------|-------------|
+| `location` | lat, lon, location name | Weather for user's city |
+| `timezone` | timezone string, local time | Display times correctly |
+| `device` | device class, platform | Responsive layout |
+| `energy` | user energy level | Adjust notification frequency |
+| `attention` | user attention state | Respect deep focus |
+
+**`signals`** — which signal types your interface will push to world state:
+
+Each signal type you declare can be individually toggled by the user. If denied, your `POST gateway/signals` call for that type returns 403. Your daemon should handle this gracefully (skip the signal, don't crash).
+
+**`messages`** — which message types your interface will push to the reasoning loop:
+
+Messages cost LLM tokens and may interrupt the user. Listing them as scopes lets the user control which message types they want. A user might allow `weather_emergency` but deny a less critical message type.
+
+#### Scope Descriptions
+
+Every scope must include a human-readable description explaining why the interface needs it. These are shown to the user during installation. Be specific and honest — vague descriptions reduce trust:
+
+```
+// Good
+"location": "Required for showing weather at your current city"
+
+// Bad
+"location": "Used by the interface"
+```
+
+#### Handling Denied Scopes
+
+When a scope is denied:
+- **Context**: the field is omitted from the `GET gateway/context` response
+- **Signals**: `POST gateway/signals` returns 403 for that signal type
+- **Messages**: `POST gateway/messages` returns 403 for that message type
+
+Your daemon must handle this gracefully. Examples:
+- Location denied → ask user to set a default city in your settings UI
+- Signal denied → skip background updates for that type
+- Message denied → downgrade to a signal (world state instead of direct message)
+
+---
+
+### Gateway Endpoints (Your Daemon Calls These)
+
+Your daemon communicates with Chalie through the dashboard gateway. You never call Chalie directly.
+
+#### `POST {gateway}/signals` — Push a Signal (World State)
+
+Signals are passive world knowledge. Zero LLM cost. Use for background updates.
 
 **Body**:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `signal_type` | string | yes | — | Signal category (must be declared in `/meta` response) |
+| `signal_type` | string | yes | — | Must be declared in your scopes |
 | `content` | string | yes | — | Human-readable description |
-| `source` | string | no | interface id | Originating system |
-| `activation_energy` | float | no | 0.5 | Salience weight 0-1 (higher = stays visible longer) |
+| `activation_energy` | float | no | 0.5 | Salience weight 0-1 |
 | `metadata` | object | no | null | Structured data |
 
 ```json
 {
   "signal_type": "forecast_update",
   "content": "London: 22°C, partly cloudy. Rain expected tomorrow.",
-  "source": "weather",
   "activation_energy": 0.4,
-  "metadata": {
-    "temp": 22,
-    "condition": "partly_cloudy",
-    "tomorrow_rain_chance": 80
-  }
+  "metadata": {"temp": 22, "condition": "partly_cloudy"}
 }
 ```
 
-**Response**: `202 {"ok": true, "signal_id": "<uuid>"}`
+**Response**: `202 {"ok": true}` or `403` if scope denied.
 
-**Batch variant**: `POST {chalie_host}/api/signals/batch` — array of up to 50 signals.
+**Batch**: `POST {gateway}/signals/batch` — array of up to 50 signals.
 
-#### `POST {chalie_host}/api/messages` — Push a Message (Reasoning Loop)
+#### `POST {gateway}/messages` — Push a Message (Reasoning Loop)
 
-Messages are direct communication. Chalie reasons about them and may surface them to the user. Use for actionable items the user should know about.
-
-**Headers**: `Authorization: Bearer {access_key}`
+Messages enter Chalie's reasoning loop. Costs LLM tokens. Use for actionable items.
 
 **Body**:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `text` | string | yes | Message content |
-| `source` | string | no | Interface identifier |
 | `topic` | string | no | Topic hint |
 | `metadata` | object | no | Structured context |
 
 ```json
 {
-  "text": "Severe weather alert: Storm warning for London from 6pm tonight. Wind gusts up to 70mph expected.",
-  "source": "weather",
+  "text": "Severe weather alert: Storm warning for London from 6pm tonight.",
   "topic": "weather",
-  "metadata": {
-    "alert_type": "storm_warning",
-    "severity": "severe",
-    "starts_at": "2026-03-17T18:00:00Z"
+  "metadata": {"alert_type": "storm_warning", "severity": "severe"}
+}
+```
+
+**Response**: `202 {"ok": true}` or `403` if scope denied.
+
+#### `GET {gateway}/context` — Get User Context
+
+Returns the user's current context, filtered by your approved scopes.
+
+**Response** `200 OK` (only fields the user approved):
+
+```json
+{
+  "timezone": "Europe/London",
+  "local_time": "2026-03-17T14:30:00Z",
+  "location": {
+    "lat": 51.5074,
+    "lon": -0.1278,
+    "name": "London, UK"
   }
 }
 ```
 
-**Response**: `202 {"ok": true, "message_id": "<uuid>"}`
+If the user denied `location`, the response simply omits it:
 
-**When to use signals vs messages:**
+```json
+{
+  "timezone": "Europe/London",
+  "local_time": "2026-03-17T14:30:00Z"
+}
+```
+
+---
+
+### When to Use Signals vs Messages
 
 | Scenario | Use | Why |
 |----------|-----|-----|
@@ -270,55 +372,27 @@ Messages are direct communication. Chalie reasons about them and may surface the
 | Inbox count: 47 unread | Signal | Passive awareness |
 | Urgent email from boss | Message | Actionable, time-sensitive |
 | Stock price changed | Signal | Background, user decides relevance |
-| Stock price crashed 20% | Message | User likely needs to act |
+| Stock crashed 20% | Message | User likely needs to act |
 
-#### `GET {chalie_host}/api/query/context` — Get User Context
-
-Returns the user's current context (location, timezone, device, energy level). Use this to make your interface context-aware.
-
-**Headers**: `Authorization: Bearer {access_key}`
-
-**Response** `200 OK`:
-
-```json
-{
-  "timezone": "Europe/London",
-  "locale": "en-GB",
-  "local_time": "2026-03-17T14:30:00Z",
-  "location": {
-    "lat": 51.5074,
-    "lon": -0.1278,
-    "name": "London, UK"
-  },
-  "device": {
-    "class": "phone",
-    "platform": "iOS"
-  },
-  "energy": "high",
-  "attention": "casual"
-}
-```
-
-Fields may be `null` if the user hasn't granted permissions (e.g., location) or if no frontend is connected. Always handle missing fields gracefully.
+Default to signals. Only use messages for things the user genuinely needs to act on. A noisy interface that spams messages will get uninstalled.
 
 ---
 
 ## Initialization
 
-When your daemon starts, it receives a runtime context via command-line argument:
+Your daemon starts with minimal arguments:
 
 ```bash
-./your-daemon --chalie-host=http://localhost:8081 --access-key=abc123 --data-dir=/data/weather --port=4001
+./your-daemon --gateway=http://localhost:3000 --port=4001 --data-dir=./data
 ```
 
 | Argument | Description |
 |----------|-------------|
-| `--chalie-host` | Chalie backend URL |
-| `--access-key` | Authentication key for Chalie API |
-| `--data-dir` | Writable directory for your interface's persistent data |
-| `--port` | Port to run your HTTP server on |
+| `--gateway` | Dashboard gateway URL (always localhost) |
+| `--port` | Port for your HTTP server |
+| `--data-dir` | Writable directory for your persistent data |
 
-You do NOT hardcode any of these. They are injected by the dashboard when your interface is installed. The examples in this repo include a helper that parses these arguments and provides a `ChalieClient` you can use throughout your code.
+No tokens, no API keys, no Chalie host. The gateway handles all authentication transparently. Your daemon just makes HTTP calls to the gateway URL.
 
 ---
 
@@ -328,22 +402,24 @@ Your frontend consists of two files:
 
 ### `index.html`
 
-The full-screen app layout. This is loaded into the dashboard's interface container when the user opens your interface. Design it as a complete app — not a widget or card.
+The full-screen app layout loaded when the user opens your interface. Design it as a complete app.
 
 Guidelines:
 - Use `100%` height/width (the dashboard provides the container)
-- Follow the Radiant design system for visual consistency (dark theme, accent glows)
-- Include all your CSS inline or in a `<style>` tag (no external stylesheets to avoid CORS)
+- Follow the Radiant design system for consistency (dark theme, accent glows — see `frontend/index.html` for baseline tokens)
+- Include CSS inline or in a `<style>` tag
 - Load `bundle.js` as a module: `<script type="module" src="bundle.js"></script>`
 
 ### `bundle.js`
 
-Your frontend logic. It should export two functions:
+Your frontend logic. Exports two functions:
 
 ```javascript
 // Called when the user opens your interface
 export function mount(container, config) {
-  // config = { chalie_host, access_key }
+  // config = { gateway, daemon_host }
+  // gateway = dashboard gateway URL (same as daemon's --gateway)
+  // daemon_host = your daemon's URL (for fetching your own data)
   // Render your UI into container
 }
 
@@ -353,7 +429,7 @@ export function unmount(container) {
 }
 ```
 
-Your frontend can call Chalie's API directly (using the provided `config.chalie_host` and `config.access_key`) or communicate with your own daemon for data.
+Your frontend can call the gateway for context data or your own daemon for interface-specific data. All gateway calls go through the same scope enforcement.
 
 ---
 
@@ -361,7 +437,7 @@ Your frontend can call Chalie's API directly (using the provided `config.chalie_
 
 ```
 your-interface/
-├── handler          # Your daemon binary (compiled) or entry script
+├── handler          # Your daemon binary or entry script
 ├── frontend/
 │   ├── index.html   # Full-screen app layout
 │   ├── bundle.js    # Frontend logic (mount/unmount exports)
@@ -373,13 +449,13 @@ your-interface/
 
 ## Examples
 
-This repo includes working daemon skeletons in three languages:
+Working daemon skeletons in three languages:
 
-| Language | Directory | HTTP Framework | Lines of Code |
-|----------|-----------|---------------|---------------|
-| Python | `examples/python/` | Flask | ~120 |
-| Go | `examples/go/` | net/http | ~130 |
-| JavaScript | `examples/javascript/` | Deno (std/http) | ~110 |
+| Language | Directory | HTTP Framework | Lines |
+|----------|-----------|---------------|-------|
+| Python | `examples/python/` | Flask | ~100 |
+| Go | `examples/go/` | net/http | ~120 |
+| JavaScript | `examples/javascript/` | Deno std/http | ~100 |
 
 Each example implements all required endpoints with a dummy "echo" capability. Copy one, replace the business logic, and you have a working interface.
 
@@ -389,24 +465,34 @@ Each example implements all required endpoints with a dummy "echo" capability. C
 
 ```
 INSTALL
-  Dashboard starts your daemon with --chalie-host, --access-key, --port, --data-dir
-  → Chalie calls GET /health (verify alive)
-  → Chalie calls GET /capabilities (register tools)
-  → Chalie calls GET /meta (show in launcher)
-  → Your daemon starts its own background work
+  Dashboard starts your daemon with --gateway, --port, --data-dir
+  → GET /health (verify alive)
+  → GET /capabilities (register tools with Chalie)
+  → GET /meta (read scopes + metadata)
+  → Dashboard shows scope approval screen to user
+  → User approves/denies scopes
+  → Your daemon starts its self-managed background work
+  → Icon appears in app launcher
 
 RUNNING
   Your daemon is autonomous:
   → Polls external APIs on its own schedule
-  → Pushes signals to Chalie when it learns something
-  → Pushes messages to Chalie when something needs attention
-  → Pulls user context from Chalie when needed
+  → Pushes signals via gateway (scope-gated)
+  → Pushes messages via gateway (scope-gated)
+  → Pulls user context via gateway (field-filtered by scopes)
   → Responds to POST /execute when Chalie invokes a capability
   → Serves frontend files when user opens the interface
 
+SETTINGS CHANGE
+  User changes scope permissions in dashboard
+  → Dashboard updates internal scope table
+  → Next gateway request reflects new permissions
+  → No daemon restart needed
+
 UNINSTALL
-  Dashboard sends SIGTERM → your daemon exits gracefully
-  Dashboard deregisters your tools from Chalie
+  Dashboard sends SIGTERM → your daemon exits
+  Dashboard deregisters tools from Chalie
+  Dashboard revokes internal scope bindings
   Package directory deleted
 ```
 
@@ -414,14 +500,14 @@ UNINSTALL
 
 ## Best Practices
 
-**Signals vs Messages**: Default to signals. Only use messages for things the user genuinely needs to act on. A noisy interface that spams messages will get uninstalled.
+**Handle denied scopes gracefully.** Never crash because a scope was denied. Disable the feature that needs it and move on. Offer alternatives in your settings UI (e.g., manual location input if geolocation is denied).
 
-**Context awareness**: Pull user context before making decisions. Don't fetch weather for your server's location — fetch it for the user's location.
+**Default to signals.** Messages cost tokens and may interrupt. Use them only for genuinely urgent items. Users uninstall noisy interfaces.
 
-**Graceful degradation**: If Chalie is unreachable, your daemon should keep running. Queue signals and retry. Don't crash because the cognitive runtime is temporarily down.
+**Be context-aware.** Check `energy` and `attention` from the context endpoint before pushing messages. If the user is in deep focus, consider queuing or downgrading to a signal.
 
-**Stateless capabilities**: Your `POST /execute` handler should not depend on previous invocations. Chalie may call any capability at any time, in any order.
+**Keep capabilities stateless.** Your `POST /execute` handler should not depend on previous invocations. Chalie may call any capability at any time.
 
-**Frontend independence**: Your frontend should work even if your daemon is temporarily down. Cache the last known data. Show stale data with a timestamp rather than an error screen.
+**Frontend independence.** Your frontend should work even if your daemon is temporarily down. Cache last known data. Show stale data with a timestamp rather than an error screen.
 
-**Respect user attention**: Check `energy` and `attention` from the context endpoint before pushing messages. If the user is in deep focus, consider queuing non-urgent messages or downgrading them to signals.
+**Scope descriptions matter.** Clear, specific descriptions build trust. "Required for showing weather at your current city" is better than "Needs location access."

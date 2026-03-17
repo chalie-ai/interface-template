@@ -5,7 +5,7 @@
 //
 // Usage:
 //   go build -o daemon .
-//   ./daemon --chalie-host=http://localhost:8081 --access-key=abc123 --port=4001 --data-dir=./data
+//   ./daemon --gateway=http://localhost:3000 --port=4001 --data-dir=./data
 
 package main
 
@@ -35,85 +35,79 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// Chalie Client — handles all communication with Chalie backend
+// Gateway Client — communicates with Chalie via dashboard gateway
 // ---------------------------------------------------------------------------
 
-type ChalieClient struct {
-	Host      string
-	AccessKey string
+type GatewayClient struct {
+	GatewayURL string
 }
 
-func (c *ChalieClient) headers() map[string]string {
-	return map[string]string{
-		"Authorization": "Bearer " + c.AccessKey,
-		"Content-Type":  "application/json",
-	}
-}
-
-func (c *ChalieClient) doJSON(method, path string, body interface{}) (*http.Response, error) {
-	var reader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		reader = bytes.NewReader(data)
-	}
-	req, err := http.NewRequest(method, c.Host+path, reader)
+func (g *GatewayClient) postJSON(path string, body interface{}) (*http.Response, error) {
+	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range c.headers() {
-		req.Header.Set(k, v)
+	req, err := http.NewRequest("POST", g.GatewayURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	return client.Do(req)
+	req.Header.Set("Content-Type", "application/json")
+	return (&http.Client{Timeout: 10 * time.Second}).Do(req)
 }
 
-// PushSignal sends a signal to Chalie's world state (zero LLM cost).
-func (c *ChalieClient) PushSignal(signalType, content string, energy float64, metadata map[string]interface{}) {
-	payload := map[string]interface{}{
+func (g *GatewayClient) getJSON(path string) (map[string]interface{}, error) {
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(g.GatewayURL + path)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result, nil
+}
+
+// PushSignal sends a signal to world state (zero LLM cost). Scope-gated.
+func (g *GatewayClient) PushSignal(signalType, content string, energy float64, metadata map[string]interface{}) {
+	resp, err := g.postJSON("/signals", map[string]interface{}{
 		"signal_type":       signalType,
 		"content":           content,
-		"source":            InterfaceID,
 		"activation_energy": energy,
 		"metadata":          metadata,
-	}
-	resp, err := c.doJSON("POST", "/api/signals", payload)
+	})
 	if err != nil {
 		log.Printf("Failed to push signal: %v", err)
 		return
 	}
 	resp.Body.Close()
+	if resp.StatusCode == 403 {
+		log.Printf("Signal '%s' denied by scope — skipping", signalType)
+		return
+	}
 	log.Printf("Signal pushed: %s (status=%d)", signalType, resp.StatusCode)
 }
 
-// PushMessage sends a message to Chalie's reasoning loop (costs LLM tokens).
-func (c *ChalieClient) PushMessage(text string, topic string, metadata map[string]interface{}) {
-	payload := map[string]interface{}{
-		"text":     text,
-		"source":   InterfaceID,
-		"topic":    topic,
-		"metadata": metadata,
-	}
-	resp, err := c.doJSON("POST", "/api/messages", payload)
+// PushMessage sends a message to reasoning loop (costs tokens). Scope-gated.
+func (g *GatewayClient) PushMessage(text, topic string, metadata map[string]interface{}) {
+	resp, err := g.postJSON("/messages", map[string]interface{}{
+		"text": text, "topic": topic, "metadata": metadata,
+	})
 	if err != nil {
 		log.Printf("Failed to push message: %v", err)
 		return
 	}
 	resp.Body.Close()
+	if resp.StatusCode == 403 {
+		log.Printf("Message denied by scope — skipping")
+	}
 }
 
-// GetContext returns the user's current context (location, timezone, device).
-func (c *ChalieClient) GetContext() map[string]interface{} {
-	resp, err := c.doJSON("GET", "/api/query/context", nil)
+// GetContext returns user context filtered by approved scopes.
+func (g *GatewayClient) GetContext() map[string]interface{} {
+	result, err := g.getJSON("/context")
 	if err != nil {
 		log.Printf("Failed to get context: %v", err)
 		return nil
 	}
-	defer resp.Body.Close()
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
 	return result
 }
 
@@ -121,7 +115,7 @@ func (c *ChalieClient) GetContext() map[string]interface{} {
 // Capability Handlers — REPLACE THESE with your business logic
 // ---------------------------------------------------------------------------
 
-func handleEcho(params map[string]interface{}, chalie *ChalieClient) map[string]interface{} {
+func handleEcho(params map[string]interface{}, _ *GatewayClient) map[string]interface{} {
 	text, _ := params["text"].(string)
 	return map[string]interface{}{
 		"text":  fmt.Sprintf("Echo: %s", text),
@@ -130,7 +124,7 @@ func handleEcho(params map[string]interface{}, chalie *ChalieClient) map[string]
 	}
 }
 
-var handlers = map[string]func(map[string]interface{}, *ChalieClient) map[string]interface{}{
+var handlers = map[string]func(map[string]interface{}, *GatewayClient) map[string]interface{}{
 	"echo": handleEcho,
 }
 
@@ -138,11 +132,11 @@ var handlers = map[string]func(map[string]interface{}, *ChalieClient) map[string
 // Background Worker — REPLACE with your polling/monitoring logic
 // ---------------------------------------------------------------------------
 
-func backgroundWorker(chalie *ChalieClient, dataDir string) {
+func backgroundWorker(gw *GatewayClient, dataDir string) {
 	log.Println("Background worker started")
 	for {
-		ctx := chalie.GetContext()
-		location := "unknown"
+		ctx := gw.GetContext()
+		location := "not available"
 		if ctx != nil {
 			if loc, ok := ctx["location"].(map[string]interface{}); ok {
 				if name, ok := loc["name"].(string); ok {
@@ -150,12 +144,10 @@ func backgroundWorker(chalie *ChalieClient, dataDir string) {
 				}
 			}
 		}
-		chalie.PushSignal(
-			"example_update",
-			fmt.Sprintf("Example interface is running. User location: %s", location),
-			0.2,
-			nil,
-		)
+
+		content := fmt.Sprintf("Example running. User location: %s", location)
+		gw.PushSignal("example_update", content, 0.2, nil)
+
 		time.Sleep(1 * time.Hour) // Your schedule — change as needed
 	}
 }
@@ -165,34 +157,33 @@ func backgroundWorker(chalie *ChalieClient, dataDir string) {
 // ---------------------------------------------------------------------------
 
 func main() {
-	chalieHost := flag.String("chalie-host", "", "Chalie backend URL")
-	accessKey := flag.String("access-key", "", "Chalie access key")
+	gatewayURL := flag.String("gateway", "", "Dashboard gateway URL")
 	port := flag.Int("port", 4001, "Port for this daemon")
 	dataDir := flag.String("data-dir", "./data", "Persistent data directory")
 	flag.Parse()
 
-	if *chalieHost == "" || *accessKey == "" {
-		log.Fatal("--chalie-host and --access-key are required")
+	if *gatewayURL == "" {
+		log.Fatal("--gateway is required")
 	}
 	os.MkdirAll(*dataDir, 0755)
 
-	chalie := &ChalieClient{Host: *chalieHost, AccessKey: *accessKey}
-
-	// Resolve frontend directory (relative to examples/)
+	gw := &GatewayClient{GatewayURL: *gatewayURL}
 	frontendDir := filepath.Join("..", "..", "frontend")
 
-	// Start background worker
-	go backgroundWorker(chalie, *dataDir)
+	go backgroundWorker(gw, *dataDir)
 
-	// Routes
+	// Health
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status": "ok", "name": InterfaceName, "version": InterfaceVersion,
 		})
 	})
 
+	// Capabilities
 	http.HandleFunc("/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		caps := []map[string]interface{}{
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{
 			{
 				"name":        "echo",
 				"description": "Echo back the input text (demo capability)",
@@ -201,30 +192,33 @@ func main() {
 				},
 				"returns": map[string]string{"type": "object", "description": "The echoed text"},
 			},
-		}
-		json.NewEncoder(w).Encode(caps)
-	})
-
-	http.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":            InterfaceID,
-			"name":          InterfaceName,
-			"version":       InterfaceVersion,
-			"description":   InterfaceDesc,
-			"author":        InterfaceAuthor,
-			"signals":       []string{"example_update"},
-			"config_schema": map[string]interface{}{},
 		})
 	})
 
+	// Meta
+	http.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id": InterfaceID, "name": InterfaceName, "version": InterfaceVersion,
+			"description": InterfaceDesc, "author": InterfaceAuthor,
+			"scopes": map[string]interface{}{
+				"context":  map[string]string{"location": "Used to personalize responses", "timezone": "Display times correctly"},
+				"signals":  map[string]string{"example_update": "Periodic status updates"},
+				"messages": map[string]string{},
+			},
+		})
+	})
+
+	// Execute
 	http.HandleFunc("/execute", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Capability string                 `json:"capability"`
 			Params     map[string]interface{} `json:"params"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
 
-		handler, ok := handlers[body.Capability]
+		fn, ok := handlers[body.Capability]
 		if !ok {
 			w.WriteHeader(404)
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -232,10 +226,10 @@ func main() {
 			})
 			return
 		}
-		result := handler(body.Params, chalie)
-		json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(fn(body.Params, gw))
 	})
 
+	// Frontend
 	http.HandleFunc("/index.html", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(frontendDir, "index.html"))
 	})
