@@ -456,81 +456,41 @@ async function executeCommand(
 /**
  * Render the widget shown when the user opens your interface inside the dashboard.
  *
- * Return an HTML string containing a single root `<div>`. The dashboard injects
- * it directly into the page — do NOT return a full HTML document. No `<!DOCTYPE>`,
- * no `<html>`, no `<head>`, no `<body>`. The dashboard owns the page shell;
- * your interface is a full-screen widget within it.
- *
- * ─── The `config` Argument ────────────────────────────────────────────────────
- *
- * config.gateway     The dashboard gateway URL (same as --gateway on startup).
- *                    Use this to call `GET /context`, `POST /signals`, etc.
- *                    All gateway calls are scope-enforced.
- *
- * config.daemonHost  The URL of this daemon (your own server).
- *                    Use this to fetch interface-specific data from your own
- *                    endpoints, if you add any.
- *
- * ─── Structure Rules ──────────────────────────────────────────────────────────
- *
- * - Return exactly one root `<div>` that fills its container.
- * - Do NOT include a `<style>` tag — the dashboard provides styling options.
- * - Use `width: 100%; height: 100%` on the root div — the dashboard sets the
- *   container size.
- * - `<script type="module">` tags inside your root div are fine.
- *
- * ─── Design Guidelines ────────────────────────────────────────────────────────
- *
- * - The dashboard injects Radiant design system tokens — dark theme, accent
- *   glows, typography — into the page. Use those CSS variables rather than
- *   hardcoding colours or fonts.
- * - Your widget should work even if your daemon is temporarily down. Cache the
- *   last known data in localStorage and show it with a "last updated" timestamp
- *   rather than a blank error screen.
+ * Return an HTML string containing a single root `<div>` with plain HTML tags.
+ * The dashboard injects it directly into the page.
  *
  * ─── Data Flow ────────────────────────────────────────────────────────────────
  *
- *   1. From the gateway (scope-enforced context):
- *      fetch(`${config.gateway}/context`)
- *
- *   2. From your own daemon (any custom endpoints you add):
- *      fetch(`${config.daemonHost}/my-data`)
+ * config.gateway     Call this to read user context or push signals/messages.
+ * config.daemonHost  Call this to fetch data from your own daemon endpoints.
  *
  * ─── Example ──────────────────────────────────────────────────────────────────
  *
  * ```ts
  * function renderInterface(config: InterfaceConfig): string {
  *   return `
- *   <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;">
- *     <div id="weather-app">Loading...</div>
+ *   <div>
+ *     <h1>Weather</h1>
+ *     <p id="forecast">Loading...</p>
  *     <script type="module">
- *       const gateway = ${JSON.stringify(config.gateway)};
- *       const ctx = await fetch(gateway + "/context").then(r => r.json());
- *       document.getElementById("weather-app").textContent =
- *         "Weather for " + (ctx.location?.name ?? "your location");
+ *       const data = await fetch(${JSON.stringify(config.daemonHost)} + "/forecast").then(r => r.json());
+ *       document.getElementById("forecast").textContent = data.summary;
  *     </script>
  *   </div>`;
  * }
  * ```
  *
  * @param config - Gateway and daemon URLs injected by the framework.
- * @returns      - An HTML string with a single root <div>. No full document.
+ * @returns      - An HTML string with a single root <div>.
  */
 function renderInterface(config: InterfaceConfig): string {
   return `
-<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;">
+<div>
   <h1>${NAME}</h1>
   <p>${DESCRIPTION}</p>
-  <p>Replace <code>renderInterface()</code> in daemon.ts with your UI.</p>
-
   <script type="module">
-    // config is injected by the framework — use these URLs to talk to
-    // the gateway and to this daemon.
     const gateway = ${JSON.stringify(config.gateway)};
     const daemon  = ${JSON.stringify(config.daemonHost)};
-
-    // Example: fetch context from gateway (respects user-approved scopes)
-    // const ctx = await fetch(gateway + "/context").then(r => r.json());
   </script>
 </div>`;
 }
